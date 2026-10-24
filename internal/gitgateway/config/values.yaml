@@ -1,0 +1,107 @@
+# git-gateway default configuration.
+#
+# This file is embedded into the binary and is the single source of defaults. Do not edit it
+# for a deployment: write a second file that only contains the keys you change and pass it with
+# `--config <file>`. The flag can be repeated; later files are deep-merged over earlier ones
+# (maps merge key by key, scalars and lists replace the earlier value).
+#
+# Unknown keys are rejected. Durations use Go syntax (500ms, 30s, 10m, 24h).
+
+# HTTP server.
+server:
+  # Address the HTTP server listens on.
+  listenAddr: ":8080"
+  # Log verbosity: debug, info, warn or error.
+  logLevel: info
+  # Time allowed for in-flight requests to finish after SIGTERM.
+  shutdownTimeout: 10s
+
+pdd:
+  # REQUIRED. Secret the PDD backend signs login JWTs with (the string in the backend's
+  # JwtHelper.java). The gateway derives the HS256 key from it exactly as the backend does.
+  jwtSecret: ""
+  # PDD backend, used to check project membership and to list the repositories of a project.
+  backend:
+    # Base URL of the backend.
+    url: "https://pdd-backend:5005"
+    # Skip TLS certificate verification (the backend uses a self-signed certificate).
+    insecureTLS: false
+    # Timeout of one backend request.
+    timeout: 10s
+    # Lifetime of cached project membership and repository lookups.
+    cacheTTL: 30s
+
+security:
+  # REQUIRED. Base64 of a 32-byte AES-256 key that encrypts provider tokens at rest.
+  # Generate with: openssl rand -base64 32
+  tokenKey: ""
+  # REQUIRED. Shared secret of the internal API (X-Internal-Token header).
+  # Generate with: openssl rand -hex 32
+  internalToken: ""
+
+storage:
+  # Directory of the SQLite database git-gateway.db. Must be writable.
+  dataDir: /data
+
+github:
+  # GitHub API base URL. The GraphQL endpoint is derived from it (/graphql, or /api/graphql
+  # for GitHub Enterprise URLs ending in /api/v3).
+  apiURL: "https://api.github.com"
+
+# Requests sent to GitHub and GitLab.
+upstream:
+  # Timeout of one provider request.
+  timeout: 30s
+  # Largest accepted provider response, in bytes.
+  maxBodyBytes: 10485760
+  # Simultaneous provider requests per token.
+  concurrency: 4
+
+# Provider quota protection.
+rateLimit:
+  # Share of the quota window kept for the user's own use, in [0, 1).
+  reserveFraction: 0.10
+  # Minimum reserve, in requests or GraphQL points.
+  reserveMin: 10
+  # Expected GraphQL cost of a call, checked against the quota before it is sent.
+  graphqlExpectedCost: 1
+
+# Retries of failed provider requests.
+retry:
+  # Tries per request, including the first.
+  maxAttempts: 3
+  # Backoff base delay.
+  baseDelay: 500ms
+  # Backoff cap.
+  maxDelay: 8s
+  # Longest Retry-After wait that is honored.
+  maxRetryAfter: 30s
+
+cache:
+  # Fresh lifetimes of cached provider data.
+  ttl:
+    # Pull request lists.
+    prList: 60s
+    # One pull request with commits and comments.
+    prDetail: 120s
+    # Repository file trees.
+    tree: 300s
+    # File contents.
+    file: 600s
+  # How long data is kept as a stale fallback after it stopped being fresh.
+  staleTTL: 24h
+
+# Repository files, trees and pull request diffs (test generation).
+files:
+  # Largest file content returned by the file endpoint, in bytes; longer files are cut and flagged
+  # truncated. Pull request patches share the upstream.maxBodyBytes budget.
+  maxBytes: 1048576
+  # Pages of 100 followed for pull request files and GitLab trees; more entries are flagged truncated.
+  maxPages: 20
+
+# Pull request list queries.
+list:
+  # Repositories per batched list query (GitLab: at most 10).
+  batchSize: 10
+  # Pages of 50 followed per repository.
+  maxPages: 3
