@@ -6,9 +6,12 @@ merge requests (GitLab) of the repositories bound to a PDD project, loads one pu
 its commits and comments, and persists the fetched data and the provider tokens so that other
 services (the test case agent) can read the same data after the user's JWT has expired.
 
-Every provider call follows [ADR 0001](../../../docs/adr/0001-git-provider-request-strategy.md):
+Every provider call uses the shared [upstream component](../../internal/gitgateway/upstream/doc.go):
 GraphQL with batching, TTL cache with stale fallback, quota reserve, bounded retries and a
 per-token concurrency cap. The browser never talks to GitHub or GitLab.
+
+The [component overview](../../README.md#gateway-components) describes ownership
+and dependencies; HTTP behavior is documented below.
 
 ## How it works
 

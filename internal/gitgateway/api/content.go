@@ -5,7 +5,8 @@ import (
 	"time"
 
 	"pdd/services/internal/gitgateway/model"
-	"pdd/services/internal/gitgateway/service"
+	"pdd/services/internal/gitgateway/pulls"
+	"pdd/services/internal/gitgateway/repos"
 )
 
 type treeResponse struct {
@@ -102,7 +103,7 @@ func (s *Server) internalFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newFilesResponse(res))
 }
 
-func newFilesResponse(res service.FilesResult) filesResponse {
+func newFilesResponse(res pulls.FilesResult) filesResponse {
 	files := res.Files
 	if files == nil {
 		files = []model.ChangedFile{}
@@ -124,7 +125,7 @@ func (s *Server) internalTree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "query parameter ref is required")
 		return
 	}
-	res, err := s.Pulls.Tree(r.Context(), token, repo, ref)
+	res, err := s.Repos.Tree(r.Context(), token, repo, ref)
 	if err != nil {
 		s.writeProviderError(w, err)
 		return
@@ -146,7 +147,7 @@ func (s *Server) internalFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "query parameters ref and path are required")
 		return
 	}
-	res, err := s.Pulls.File(r.Context(), token, repo, ref, path)
+	res, err := s.Repos.File(r.Context(), token, repo, ref, path)
 	if err != nil {
 		s.writeProviderError(w, err)
 		return
@@ -156,7 +157,7 @@ func (s *Server) internalFile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func writeTree(w http.ResponseWriter, res service.TreeResult) {
+func writeTree(w http.ResponseWriter, res repos.TreeResult) {
 	entries := res.Entries
 	if entries == nil {
 		entries = []model.TreeEntry{}

@@ -10,15 +10,14 @@ import (
 
 	"pdd/services/internal/gitgateway/provider"
 	"pdd/services/internal/gitgateway/provider/providertest"
-	"pdd/services/pkg/gitprovider"
-	"pdd/services/pkg/gitprovider/client"
+	"pdd/services/internal/gitgateway/upstream"
 )
 
 var t0 = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 
 func TestMetaMerge(t *testing.T) {
 	fresh := provider.Meta{FetchedAt: t0}
-	older := provider.Meta{FetchedAt: t0.Add(-time.Hour), Stale: true, StaleReason: gitprovider.ErrQuotaReserve}
+	older := provider.Meta{FetchedAt: t0.Add(-time.Hour), Stale: true, StaleReason: upstream.ErrQuotaReserve}
 
 	if got := (provider.Meta{}).Merge(fresh); got != fresh {
 		t.Errorf("zero.Merge(x) = %+v", got)
@@ -27,7 +26,7 @@ func TestMetaMerge(t *testing.T) {
 		t.Errorf("x.Merge(zero) = %+v", got)
 	}
 	got := fresh.Merge(older)
-	if !got.FetchedAt.Equal(older.FetchedAt) || !got.Stale || !errors.Is(got.StaleReason, gitprovider.ErrQuotaReserve) {
+	if !got.FetchedAt.Equal(older.FetchedAt) || !got.Stale || !errors.Is(got.StaleReason, upstream.ErrQuotaReserve) {
 		t.Errorf("fresh.Merge(older stale) = %+v", got)
 	}
 	if got := older.Merge(fresh); !got.Stale || !got.FetchedAt.Equal(older.FetchedAt) {
@@ -42,7 +41,7 @@ func TestGraphQLErrors(t *testing.T) {
 	if !errors.Is(notFound, provider.ErrNotFound) || errors.Is(other, provider.ErrNotFound) {
 		t.Error("ErrNotFound matching is wrong")
 	}
-	if errors.Is(notFound, gitprovider.ErrMaxRetry) {
+	if errors.Is(notFound, upstream.ErrMaxRetry) {
 		t.Error("matched an unrelated error")
 	}
 	if got := notFound.Error(); got != "graphql: a; b" {
@@ -59,9 +58,9 @@ func TestAbsoluteURL(t *testing.T) {
 	}
 }
 
-func listRequest(srv *providertest.RESTServer) func(int) client.Request {
-	return func(page int) client.Request {
-		return client.Request{URL: srv.URL + "/list?page=" + string(rune('0'+page)), Token: "tok"}
+func listRequest(srv *providertest.RESTServer) func(int) upstream.Request {
+	return func(page int) upstream.Request {
+		return upstream.Request{URL: srv.URL + "/list?page=" + string(rune('0'+page)), Token: "tok"}
 	}
 }
 
@@ -97,14 +96,14 @@ func TestPagesAndGetReportFailures(t *testing.T) {
 		t.Error("malformed page accepted")
 	}
 	status = http.StatusNotFound
-	if _, _, err := provider.Get(context.Background(), providertest.NewClient(t), client.Request{URL: srv.URL + "/x"}); !errors.Is(err, provider.ErrNotFound) {
+	if _, _, err := provider.Get(context.Background(), providertest.NewClient(t), upstream.Request{URL: srv.URL + "/x"}); !errors.Is(err, provider.ErrNotFound) {
 		t.Errorf("404 error = %v", err)
 	}
 	status = http.StatusTeapot
-	if _, _, err := provider.Get(context.Background(), providertest.NewClient(t), client.Request{URL: srv.URL + "/x"}); err == nil || errors.Is(err, provider.ErrNotFound) {
+	if _, _, err := provider.Get(context.Background(), providertest.NewClient(t), upstream.Request{URL: srv.URL + "/x"}); err == nil || errors.Is(err, provider.ErrNotFound) {
 		t.Errorf("418 error = %v", err)
 	}
-	if _, _, err := provider.Get(context.Background(), providertest.NewClient(t), client.Request{URL: "::bad"}); err == nil {
+	if _, _, err := provider.Get(context.Background(), providertest.NewClient(t), upstream.Request{URL: "::bad"}); err == nil {
 		t.Error("invalid URL accepted")
 	}
 	var v struct{}

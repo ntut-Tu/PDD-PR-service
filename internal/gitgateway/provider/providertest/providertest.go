@@ -11,20 +11,17 @@ import (
 	"testing"
 	"time"
 
-	"pdd/services/pkg/gitprovider/cache"
-	"pdd/services/pkg/gitprovider/client"
-	"pdd/services/pkg/gitprovider/ratelimit"
-	"pdd/services/pkg/gitprovider/retry"
+	"pdd/services/internal/gitgateway/upstream"
 )
 
 // NewClient returns a policy client with an in-memory cache and a retrier that
 // does not sleep.
-func NewClient(t *testing.T) *client.Client {
+func NewClient(t *testing.T) *upstream.Client {
 	t.Helper()
-	c, err := client.New(client.Config{
-		Cache:      cache.NewMemoryStore(0, nil),
-		Limiter:    ratelimit.NewTracker(ratelimit.DefaultConfig()),
-		Retrier:    &retry.Retrier{Policy: retry.DefaultPolicy(), Sleep: func(context.Context, time.Duration) error { return nil }},
+	c, err := upstream.New(upstream.Config{
+		Cache:      upstream.NewMemoryStore(0, nil),
+		Limiter:    upstream.NewQuotaTracker(upstream.DefaultQuotaConfig()),
+		Retrier:    &upstream.Retrier{Policy: upstream.DefaultPolicy(), Sleep: func(context.Context, time.Duration) error { return nil }},
 		DefaultTTL: time.Minute,
 		StaleTTL:   time.Hour,
 	})

@@ -1,5 +1,5 @@
-// Package provider defines the contract between the gateway service and the
-// GitHub and GitLab adapters, and the helpers the adapters share.
+// Package provider contains normalized adapter results and shared API decoding helpers.
+// Consumers define their own capability interfaces.
 package provider
 
 import (
@@ -12,28 +12,12 @@ import (
 	"time"
 
 	"pdd/services/internal/gitgateway/model"
-	"pdd/services/pkg/gitprovider"
-	"pdd/services/pkg/gitprovider/client"
+	"pdd/services/internal/gitgateway/upstream"
 )
 
 // ErrNotFound is matched by errors.Is when the provider has no such repository
 // or pull request, or the token cannot see it.
 var ErrNotFound = errors.New("provider: not found")
-
-// Provider reads pull requests of one hosting provider.
-type Provider interface {
-	// ListPulls returns the open pull requests of every repo, one RepoPulls per
-	// repo in the same order. A failure affects only the repos it concerns.
-	ListPulls(ctx context.Context, token string, repos []model.Repo) []RepoPulls
-	// PullDetail returns one pull request with its commits and comments.
-	PullDetail(ctx context.Context, token string, repo model.Repo, number int) (model.PullDetail, Meta, error)
-	// PullFiles returns the files changed by a pull request.
-	PullFiles(ctx context.Context, token string, repo model.Repo, number int) (ChangedFiles, Meta, error)
-	// Tree returns the recursive file tree of repo at ref (a commit SHA).
-	Tree(ctx context.Context, token string, repo model.Repo, ref string) (Tree, Meta, error)
-	// File returns the raw content of path at ref. The content is not limited here.
-	File(ctx context.Context, token string, repo model.Repo, ref, path string) ([]byte, Meta, error)
-}
 
 // ChangedFiles is the file list of a pull request.
 type ChangedFiles struct {
@@ -64,7 +48,7 @@ type Meta struct {
 	FetchedAt time.Time
 	// Stale is true when the data is cached because the provider could not be asked.
 	Stale bool
-	// StaleReason matches gitprovider.ErrQuotaReserve or gitprovider.ErrMaxRetry.
+	// StaleReason matches upstream.ErrQuotaReserve or upstream.ErrMaxRetry.
 	StaleReason error
 }
 
@@ -119,16 +103,16 @@ func (e GraphQLErrors) Is(target error) bool {
 }
 
 // Query sends a GraphQL request and decodes the data member into T. A provider
-// status outside 2xx becomes a *gitprovider.StatusError. Errors that come with
+// status outside 2xx becomes a *upstream.StatusError. Errors that come with
 // partial data are returned next to the data, so callers can judge per item.
-func Query[T any](ctx context.Context, c *client.Client, req client.GraphQLRequest) (*T, GraphQLErrors, Meta, error) {
+func Query[T any](ctx context.Context, c *upstream.Client, req upstream.GraphQLRequest) (*T, GraphQLErrors, Meta, error) {
 	resp, err := c.GraphQL(ctx, req)
 	if err != nil {
 		return nil, nil, Meta{}, err
 	}
 	meta := Meta{FetchedAt: resp.FetchedAt, Stale: resp.Stale, StaleReason: resp.StaleReason}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, nil, meta, &gitprovider.StatusError{StatusCode: resp.StatusCode}
+		return nil, nil, meta, &upstream.StatusError{StatusCode: resp.StatusCode}
 	}
 	var envelope struct {
 		Data   *T            `json:"data"`
@@ -156,8 +140,8 @@ func AbsoluteURL(base, link string) string {
 }
 
 // Get sends a REST GET under the client policy. A 404 becomes ErrNotFound and any other
-// status outside 2xx a *gitprovider.StatusError.
-func Get(ctx context.Context, c *client.Client, req client.Request) (*client.Response, Meta, error) {
+// status outside 2xx a *upstream.StatusError.
+func Get(ctx context.Context, c *upstream.Client, req upstream.Request) (*upstream.Response, Meta, error) {
 	resp, err := c.Get(ctx, req)
 	if err != nil {
 		return nil, Meta{}, err
@@ -169,7 +153,7 @@ func Get(ctx context.Context, c *client.Client, req client.Request) (*client.Res
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, meta, ErrNotFound
 	default:
-		return nil, meta, &gitprovider.StatusError{StatusCode: resp.StatusCode}
+		return nil, meta, &upstream.StatusError{StatusCode: resp.StatusCode}
 	}
 }
 
@@ -177,8 +161,8 @@ func Get(ctx context.Context, c *client.Client, req client.Request) (*client.Res
 // []T. It stops at the first page with fewer than perPage items. When maxPages are read and
 // the last one was full, more items may exist and truncated is true. Pagination relies on
 // the page size, not on Link headers, because cached responses carry no such headers.
-func Pages[T any](ctx context.Context, c *client.Client, perPage, maxPages int,
-	request func(page int) client.Request) (items []T, truncated bool, meta Meta, err error) {
+func Pages[T any](ctx context.Context, c *upstream.Client, perPage, maxPages int,
+	request func(page int) upstream.Request) (items []T, truncated bool, meta Meta, err error) {
 	for page := 1; ; page++ {
 		resp, pageMeta, err := Get(ctx, c, request(page))
 		if err != nil {

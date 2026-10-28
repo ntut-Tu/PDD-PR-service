@@ -8,7 +8,8 @@ import (
 
 	"pdd/services/internal/gitgateway/model"
 	"pdd/services/internal/gitgateway/provider"
-	"pdd/services/internal/gitgateway/service"
+	"pdd/services/internal/gitgateway/pulls"
+	"pdd/services/internal/gitgateway/repos"
 )
 
 const (
@@ -23,7 +24,7 @@ func storedAlice(f *fixture) { f.tokens.saved["alice"] = "gho_alice" }
 
 func TestPublicTree(t *testing.T) {
 	f := newFixture(t)
-	f.pulls.tree = service.TreeResult{
+	f.pulls.tree = repos.TreeResult{
 		Ref: "headsha", Entries: []model.TreeEntry{{Path: "src/A.java", Type: "blob", Size: 12}}, Truncated: true, Stale: true, FetchedAt: now,
 	}
 
@@ -82,7 +83,7 @@ func (*statusErr) Error() string { return "boom" }
 
 func TestPublicFiles(t *testing.T) {
 	f := newFixture(t)
-	f.pulls.files = service.FilesResult{
+	f.pulls.files = pulls.FilesResult{
 		HeadSHA: "head", BaseSHA: "base", Stale: true, FetchedAt: now,
 		Files: []model.ChangedFile{{Path: "src/A.java", Status: "modified", Additions: 3, Deletions: 1, Patch: "@@"}},
 	}
@@ -132,7 +133,7 @@ func TestPublicFilesAccessControlAndErrors(t *testing.T) {
 func TestInternalFiles(t *testing.T) {
 	f := newFixture(t)
 	storedAlice(f)
-	f.pulls.files = service.FilesResult{
+	f.pulls.files = pulls.FilesResult{
 		HeadSHA: "head", BaseSHA: "base", Truncated: true,
 		Files: []model.ChangedFile{{Path: "n.java", PreviousPath: "o.java", Status: "renamed", Additions: 1, Deletions: 2, Patch: "@@"}},
 	}
@@ -166,7 +167,7 @@ func TestInternalFilesEmptyEncodesAsList(t *testing.T) {
 func TestInternalTree(t *testing.T) {
 	f := newFixture(t)
 	storedAlice(f)
-	f.pulls.tree = service.TreeResult{Ref: "abc", Entries: []model.TreeEntry{{Path: "a", Type: "tree"}}, FetchedAt: now}
+	f.pulls.tree = repos.TreeResult{Ref: "abc", Entries: []model.TreeEntry{{Path: "a", Type: "tree"}}, FetchedAt: now}
 
 	rec := f.do(http.MethodGet, internalTreePath, internalHeader(internalToken))
 
@@ -183,7 +184,7 @@ func TestInternalTree(t *testing.T) {
 func TestInternalFile(t *testing.T) {
 	f := newFixture(t)
 	storedAlice(f)
-	f.pulls.file = service.FileResult{Ref: "abc", Path: "src/A.java", Size: 9, Content: "class A{}", Truncated: true}
+	f.pulls.file = repos.FileResult{Ref: "abc", Path: "src/A.java", Size: 9, Content: "class A{}", Truncated: true}
 
 	rec := f.do(http.MethodGet, internalFilePath, internalHeader(internalToken))
 
@@ -201,7 +202,7 @@ func TestInternalFile(t *testing.T) {
 func TestInternalFileBinaryHasEmptyContent(t *testing.T) {
 	f := newFixture(t)
 	storedAlice(f)
-	f.pulls.file = service.FileResult{Ref: "abc", Path: "a.png", Size: 500, Binary: true}
+	f.pulls.file = repos.FileResult{Ref: "abc", Path: "a.png", Size: 500, Binary: true}
 
 	body := decode[map[string]any](t, f.do(http.MethodGet, internalFilePath, internalHeader(internalToken)))
 

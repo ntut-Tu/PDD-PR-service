@@ -14,9 +14,9 @@ import (
 	"pdd/services/internal/gitgateway/auth"
 	"pdd/services/internal/gitgateway/model"
 	"pdd/services/internal/gitgateway/provider"
-	"pdd/services/internal/gitgateway/service"
-	"pdd/services/internal/gitgateway/store"
-	"pdd/services/pkg/gitprovider"
+	"pdd/services/internal/gitgateway/pulls"
+	"pdd/services/internal/gitgateway/repos"
+	"pdd/services/internal/gitgateway/upstream"
 )
 
 // Backend authorizes project access and resolves repositories.
@@ -33,12 +33,16 @@ type Tokens interface {
 
 // Pulls reads pull requests from the providers.
 type Pulls interface {
-	ListPulls(ctx context.Context, token string, repos []model.Repo) service.ListResult
-	PullDetail(ctx context.Context, token string, repo model.Repo, number int) (service.DetailResult, error)
-	PullFiles(ctx context.Context, token string, repo model.Repo, number int) (service.FilesResult, error)
-	PullTree(ctx context.Context, token string, repo model.Repo, number int) (service.TreeResult, error)
-	Tree(ctx context.Context, token string, repo model.Repo, ref string) (service.TreeResult, error)
-	File(ctx context.Context, token string, repo model.Repo, ref, path string) (service.FileResult, error)
+	ListPulls(ctx context.Context, token string, repos []model.Repo) pulls.ListResult
+	PullDetail(ctx context.Context, token string, repo model.Repo, number int) (pulls.DetailResult, error)
+	PullFiles(ctx context.Context, token string, repo model.Repo, number int) (pulls.FilesResult, error)
+	PullTree(ctx context.Context, token string, repo model.Repo, number int) (repos.TreeResult, error)
+}
+
+// Repos reads repository content at a commit.
+type Repos interface {
+	Tree(ctx context.Context, token string, repo model.Repo, ref string) (repos.TreeResult, error)
+	File(ctx context.Context, token string, repo model.Repo, ref, path string) (repos.FileResult, error)
 }
 
 // Deps are the collaborators of the handlers.
@@ -48,6 +52,7 @@ type Deps struct {
 	Backend       Backend
 	Tokens        Tokens
 	Pulls         Pulls
+	Repos         Repos
 	// Health reports whether the service can serve requests.
 	Health func(ctx context.Context) error
 	Logger *slog.Logger
@@ -61,6 +66,7 @@ type Server struct {
 // NewHandler builds the router with logging and panic recovery.
 func NewHandler(deps Deps) http.Handler {
 	s := &Server{Deps: deps}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.Handle("GET /api/v1/projects/{projectId}/pulls", s.authenticated(s.listPulls))
@@ -75,14 +81,15 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")
 	})
+
 	return s.logRequests(s.recoverPanics(mux))
 }
 
 type listResponse struct {
-	Pulls     []model.Pull        `json:"pulls"`
-	Stale     bool                `json:"stale"`
-	FetchedAt time.Time           `json:"fetchedAt"`
-	Errors    []service.RepoError `json:"errors"`
+	Pulls     []model.Pull      `json:"pulls"`
+	Stale     bool              `json:"stale"`
+	FetchedAt time.Time         `json:"fetchedAt"`
+	Errors    []pulls.RepoError `json:"errors"`
 }
 
 type detailResponse struct {
@@ -176,7 +183,7 @@ func (s *Server) internalContext(w http.ResponseWriter, r *http.Request) (string
 		return "", nil, false
 	}
 	token, err := s.Tokens.Load(r.Context(), account)
-	if errors.Is(err, store.ErrTokenNotFound) {
+	if errors.Is(err, auth.ErrTokenNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "no provider token stored for the account")
 		return "", nil, false
 	}
@@ -231,20 +238,20 @@ func (s *Server) writeDetail(w http.ResponseWriter, r *http.Request, token strin
 
 func (s *Server) writeBackendError(w http.ResponseWriter, err error) {
 	s.Logger.Error("pdd backend request failed", "error", err)
-	writeError(w, http.StatusBadGateway, service.CodeUpstreamFailed, "the PDD backend is unavailable")
+	writeError(w, http.StatusBadGateway, pulls.CodeUpstreamFailed, "the PDD backend is unavailable")
 }
 
 func (s *Server) writeProviderError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, provider.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "the requested resource does not exist or is not visible to you")
-	case errors.Is(err, gitprovider.ErrQuotaReserve):
-		writeError(w, http.StatusServiceUnavailable, service.CodeQuotaReserve, err.Error())
-	case errors.Is(err, gitprovider.ErrUnauthorized):
-		writeError(w, http.StatusBadGateway, service.CodeProviderUnauthorized, "the provider rejected your access token")
+	case errors.Is(err, upstream.ErrQuotaReserve):
+		writeError(w, http.StatusServiceUnavailable, pulls.CodeQuotaReserve, err.Error())
+	case errors.Is(err, upstream.ErrUnauthorized):
+		writeError(w, http.StatusBadGateway, pulls.CodeProviderUnauthorized, "the provider rejected your access token")
 	default:
 		s.Logger.Error("provider request failed", "error", err)
-		writeError(w, http.StatusBadGateway, service.CodeUpstreamFailed, "the provider failed to answer: "+err.Error())
+		writeError(w, http.StatusBadGateway, pulls.CodeUpstreamFailed, "the provider failed to answer: "+err.Error())
 	}
 }
 

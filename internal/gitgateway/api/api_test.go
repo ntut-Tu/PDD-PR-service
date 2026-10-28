@@ -19,9 +19,9 @@ import (
 	"pdd/services/internal/gitgateway/backend"
 	"pdd/services/internal/gitgateway/model"
 	"pdd/services/internal/gitgateway/provider"
-	"pdd/services/internal/gitgateway/service"
-	"pdd/services/internal/gitgateway/store"
-	"pdd/services/pkg/gitprovider"
+	"pdd/services/internal/gitgateway/pulls"
+	"pdd/services/internal/gitgateway/repos"
+	"pdd/services/internal/gitgateway/upstream"
 )
 
 const (
@@ -63,54 +63,54 @@ func (f *fakeTokens) Save(_ context.Context, account, token string) error {
 func (f *fakeTokens) Load(_ context.Context, account string) (string, error) {
 	token, ok := f.saved[account]
 	if !ok {
-		return "", store.ErrTokenNotFound
+		return "", auth.ErrTokenNotFound
 	}
 	return token, nil
 }
 
 type fakePulls struct {
-	list      service.ListResult
+	list      pulls.ListResult
 	gotRepos  []model.Repo
-	detail    service.DetailResult
+	detail    pulls.DetailResult
 	detailErr error
 	gotToken  string
 	gotRepo   model.Repo
 	gotNumber int
 
-	files     service.FilesResult
-	tree      service.TreeResult
-	file      service.FileResult
+	files     pulls.FilesResult
+	tree      repos.TreeResult
+	file      repos.FileResult
 	contentEr error
 	gotRef    string
 	gotPath   string
 }
 
-func (f *fakePulls) PullFiles(_ context.Context, token string, repo model.Repo, number int) (service.FilesResult, error) {
+func (f *fakePulls) PullFiles(_ context.Context, token string, repo model.Repo, number int) (pulls.FilesResult, error) {
 	f.gotToken, f.gotRepo, f.gotNumber = token, repo, number
 	return f.files, f.contentEr
 }
 
-func (f *fakePulls) PullTree(_ context.Context, token string, repo model.Repo, number int) (service.TreeResult, error) {
+func (f *fakePulls) PullTree(_ context.Context, token string, repo model.Repo, number int) (repos.TreeResult, error) {
 	f.gotToken, f.gotRepo, f.gotNumber = token, repo, number
 	return f.tree, f.contentEr
 }
 
-func (f *fakePulls) Tree(_ context.Context, token string, repo model.Repo, ref string) (service.TreeResult, error) {
+func (f *fakePulls) Tree(_ context.Context, token string, repo model.Repo, ref string) (repos.TreeResult, error) {
 	f.gotToken, f.gotRepo, f.gotRef = token, repo, ref
 	return f.tree, f.contentEr
 }
 
-func (f *fakePulls) File(_ context.Context, token string, repo model.Repo, ref, path string) (service.FileResult, error) {
+func (f *fakePulls) File(_ context.Context, token string, repo model.Repo, ref, path string) (repos.FileResult, error) {
 	f.gotToken, f.gotRepo, f.gotRef, f.gotPath = token, repo, ref, path
 	return f.file, f.contentEr
 }
 
-func (f *fakePulls) ListPulls(_ context.Context, token string, repos []model.Repo) service.ListResult {
+func (f *fakePulls) ListPulls(_ context.Context, token string, repos []model.Repo) pulls.ListResult {
 	f.gotToken, f.gotRepos = token, repos
 	return f.list
 }
 
-func (f *fakePulls) PullDetail(_ context.Context, token string, repo model.Repo, number int) (service.DetailResult, error) {
+func (f *fakePulls) PullDetail(_ context.Context, token string, repo model.Repo, number int) (pulls.DetailResult, error) {
 	f.gotToken, f.gotRepo, f.gotNumber = token, repo, number
 	return f.detail, f.detailErr
 }
@@ -135,7 +135,7 @@ func newFixture(t *testing.T) *fixture {
 			},
 		},
 		tokens: &fakeTokens{saved: map[string]string{}},
-		pulls:  &fakePulls{list: service.ListResult{Pulls: []model.Pull{}, Errors: []service.RepoError{}, FetchedAt: now}},
+		pulls:  &fakePulls{list: pulls.ListResult{Pulls: []model.Pull{}, Errors: []pulls.RepoError{}, FetchedAt: now}},
 		logs:   &bytes.Buffer{},
 	}
 	f.handler = api.NewHandler(api.Deps{
@@ -144,6 +144,7 @@ func newFixture(t *testing.T) *fixture {
 		Backend:       f.backend,
 		Tokens:        f.tokens,
 		Pulls:         f.pulls,
+		Repos:         f.pulls,
 		Health:        func(context.Context) error { return f.health },
 		Logger:        slog.New(slog.NewTextHandler(f.logs, nil)),
 	})
@@ -201,10 +202,10 @@ func assertOK(t *testing.T, rec *httptest.ResponseRecorder) {
 
 func TestListPullsSuccess(t *testing.T) {
 	f := newFixture(t)
-	f.pulls.list = service.ListResult{
+	f.pulls.list = pulls.ListResult{
 		Pulls:     []model.Pull{{RepoID: 12, Provider: model.GitHub, Number: 42, Title: "T", State: "open", Mergeable: model.MergeableYes, UpdatedAt: now}},
 		FetchedAt: now,
-		Errors:    []service.RepoError{{RepoID: 13, Repo: "o/m", Code: "upstream_failed", Message: "x"}},
+		Errors:    []pulls.RepoError{{RepoID: 13, Repo: "o/m", Code: "upstream_failed", Message: "x"}},
 	}
 
 	rec := f.do(http.MethodGet, "/api/v1/projects/7/pulls", validAuth())
@@ -242,10 +243,10 @@ func TestListPullsSuccess(t *testing.T) {
 
 func TestListRepoPullsRequestsOnlyThatRepository(t *testing.T) {
 	f := newFixture(t)
-	f.pulls.list = service.ListResult{
+	f.pulls.list = pulls.ListResult{
 		Pulls:     []model.Pull{{RepoID: 13, Provider: model.GitLab, Number: 3, HeadSHA: strings.Repeat("c", 40), UpdatedAt: now}},
 		FetchedAt: now,
-		Errors:    []service.RepoError{},
+		Errors:    []pulls.RepoError{},
 	}
 
 	rec := f.do(http.MethodGet, "/api/v1/projects/7/repos/13/pulls", validAuth())
@@ -270,9 +271,9 @@ func TestListRepoPullsRequestsOnlyThatRepository(t *testing.T) {
 
 func TestListRepoPullsForwardsStaleAndErrors(t *testing.T) {
 	f := newFixture(t)
-	f.pulls.list = service.ListResult{
+	f.pulls.list = pulls.ListResult{
 		Pulls: []model.Pull{}, Stale: true, FetchedAt: now.Add(-time.Hour),
-		Errors: []service.RepoError{{RepoID: 12, Repo: "o/n", Code: "quota_reserve", Message: "x"}},
+		Errors: []pulls.RepoError{{RepoID: 12, Repo: "o/n", Code: "quota_reserve", Message: "x"}},
 	}
 
 	rec := f.do(http.MethodGet, "/api/v1/projects/7/repos/12/pulls", validAuth())
@@ -308,7 +309,7 @@ func TestListRepoPullsRejectsRepositoryOfAnotherKind(t *testing.T) {
 
 func TestListPullsStaleAndEmpty(t *testing.T) {
 	f := newFixture(t)
-	f.pulls.list = service.ListResult{Pulls: []model.Pull{}, Errors: []service.RepoError{}, Stale: true, FetchedAt: now.Add(-time.Hour)}
+	f.pulls.list = pulls.ListResult{Pulls: []model.Pull{}, Errors: []pulls.RepoError{}, Stale: true, FetchedAt: now.Add(-time.Hour)}
 
 	rec := f.do(http.MethodGet, "/api/v1/projects/7/pulls", validAuth())
 
@@ -397,7 +398,7 @@ func TestBackendFailureIsBadGateway(t *testing.T) {
 
 func TestDetailSuccess(t *testing.T) {
 	f := newFixture(t)
-	f.pulls.detail = service.DetailResult{
+	f.pulls.detail = pulls.DetailResult{
 		Pull:      model.PullDetail{Pull: model.Pull{Number: 42}, Description: "desc", Commits: []model.Commit{}, Comments: []model.Comment{}},
 		Stale:     true,
 		FetchedAt: now,
@@ -446,10 +447,10 @@ func TestDetailProviderErrors(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"quota reserve", &gitprovider.QuotaReserveError{Remaining: 1, Reserve: 10, ResetAt: now.Add(time.Hour)}, http.StatusServiceUnavailable, "quota_reserve"},
-		{"max retry", &gitprovider.MaxRetryError{Attempts: 3, Err: errors.New("503")}, http.StatusBadGateway, "upstream_failed"},
-		{"other status", &gitprovider.StatusError{StatusCode: 400}, http.StatusBadGateway, "upstream_failed"},
-		{"provider unauthorized", &gitprovider.StatusError{StatusCode: 401}, http.StatusBadGateway, "provider_unauthorized"},
+		{"quota reserve", &upstream.QuotaReserveError{Remaining: 1, Reserve: 10, ResetAt: now.Add(time.Hour)}, http.StatusServiceUnavailable, "quota_reserve"},
+		{"max retry", &upstream.MaxRetryError{Attempts: 3, Err: errors.New("503")}, http.StatusBadGateway, "upstream_failed"},
+		{"other status", &upstream.StatusError{StatusCode: 400}, http.StatusBadGateway, "upstream_failed"},
+		{"provider unauthorized", &upstream.StatusError{StatusCode: 401}, http.StatusBadGateway, "provider_unauthorized"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -465,7 +466,7 @@ func internalHeader(token string) http.Header { return http.Header{"X-Internal-T
 
 func TestInternalAPIUsesStoredTokenAfterJWTExpired(t *testing.T) {
 	f := newFixture(t)
-	f.pulls.detail = service.DetailResult{Pull: model.PullDetail{Description: "d"}, FetchedAt: now}
+	f.pulls.detail = pulls.DetailResult{Pull: model.PullDetail{Description: "d"}, FetchedAt: now}
 
 	// The user calls once, then the JWT expires.
 	assertOK(t, f.do(http.MethodGet, "/api/v1/projects/7/pulls", bearer("alice", "gho_alice", now.Add(time.Minute))))
@@ -522,7 +523,7 @@ func TestInternalAPIErrors(t *testing.T) {
 	assertError(t, f.do(http.MethodGet, "/internal/v1/projects/x/repos/12/pulls/42?account=alice", h), http.StatusNotFound, "not_found")
 	assertError(t, f.do(http.MethodGet, "/internal/v1/projects/7/repos/99/pulls/42?account=alice", h), http.StatusNotFound, "not_found")
 
-	f.pulls.detailErr = &gitprovider.QuotaReserveError{}
+	f.pulls.detailErr = &upstream.QuotaReserveError{}
 	assertError(t, f.do(http.MethodGet, "/internal/v1/projects/7/repos/12/pulls/42?account=alice", h), http.StatusServiceUnavailable, "quota_reserve")
 
 	f.backend.err = backend.ErrUnavailable
@@ -537,7 +538,7 @@ func TestInternalAPITokenStoreFailure(t *testing.T) {
 	f := newFixture(t)
 	handler := api.NewHandler(api.Deps{
 		Verifier: auth.NewVerifier(secret, nil), InternalToken: internalToken, Backend: f.backend,
-		Tokens: &brokenTokens{}, Pulls: f.pulls, Health: func(context.Context) error { return nil },
+		Tokens: &brokenTokens{}, Pulls: f.pulls, Repos: f.pulls, Health: func(context.Context) error { return nil },
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/projects/7/repos/12/pulls/1?account=alice", nil)
@@ -562,7 +563,7 @@ func TestHealthz(t *testing.T) {
 
 type panicPulls struct{ fakePulls }
 
-func (*panicPulls) ListPulls(context.Context, string, []model.Repo) service.ListResult { panic("boom") }
+func (*panicPulls) ListPulls(context.Context, string, []model.Repo) pulls.ListResult { panic("boom") }
 
 func TestPanicIsRecoveredAndRequestsAreLogged(t *testing.T) {
 	f := newFixture(t)
