@@ -1,0 +1,137 @@
+# sandbox-controller default configuration.
+#
+# This file is embedded into the binary and is the single source of defaults. Do not edit it
+# for a deployment: write a second file that only contains the keys you change and pass it with
+# `--config <file>`. The flag can be repeated; later files are deep-merged over earlier ones
+# (maps merge key by key, scalars and lists replace the earlier value).
+#
+# Unknown keys are rejected. Durations use Go syntax (500ms, 30s, 10m, 24h). Sizes use plain
+# bytes or the suffixes Ki, Mi and Gi (for example 2Gi).
+
+# HTTP server of the internal API.
+server:
+  # Address the HTTP server listens on.
+  listenAddr: ":8080"
+  # Log verbosity: debug, info, warn or error.
+  logLevel: info
+  # Time allowed for in-flight requests to finish after SIGTERM.
+  shutdownTimeout: 10s
+
+security:
+  # REQUIRED. Shared secret of the internal API (X-Internal-Token header).
+  # Generate with: openssl rand -hex 32
+  internalToken: ""
+
+# git-gateway, the only source of repository content (the provider token never enters a sandbox).
+gitGateway:
+  # Base URL of git-gateway. Its internal archive endpoint is called with the internal token of
+  # this service, so both services must share security.internalToken.
+  url: "http://pdd-git-gateway:8080"
+  # REQUIRED. X-Internal-Token that git-gateway expects (its security.internalToken). This is a
+  # different secret from security.internalToken above, which protects this service's own API.
+  internalToken: ""
+  # Timeout of one archive download.
+  timeout: 2m
+
+storage:
+  # Directory of the SQLite database sandbox-controller.db holding the SandboxRun records.
+  dataDir: /data
+
+# Source checkouts. Each run gets <dir>/<run id>/ and the directory is bind mounted into the
+# sandbox container. The path is inside the runtime container (keep it on a volume).
+workspace:
+  # Parent directory of the run workspaces.
+  dir: /var/lib/pdd-sandbox/workspaces
+  # Largest unpacked repository, in bytes. Larger archives are rejected.
+  maxBytes: 536870912
+  # Largest number of files in an archive.
+  maxFiles: 50000
+
+# Dependency caches, one directory per repository (<dir>/<projectId>/<repoId>), mounted into
+# the sandbox as Maven .m2 and Gradle caches. Same path rules as workspace.dir.
+cache:
+  dir: /var/lib/pdd-sandbox/cache
+
+# Limits of one sandbox.
+limits:
+  # Longest time a container may run; after that it is stopped and the run fails with `timeout`.
+  timeout: 5m
+  # CPUs of one container (fractions allowed).
+  cpus: 2
+  # Memory of one container, swap included.
+  memory: 2Gi
+  # Largest number of processes and threads in one container.
+  pids: 512
+  # Sandboxes running at the same time; more runs wait as Pending.
+  maxConcurrent: 2
+  # User the build runs as inside the container (uid[:gid]); never root.
+  user: "1000:1000"
+
+# Network of the sandboxes. They have no route out; the only thing they can reach is the
+# allow-list proxy served by this service. Every sandbox gets its own network namespace on a
+# point-to-point link to the runtime container (see runtime.containerd.cni).
+network:
+  # Name of the sandbox network (the CNI network name).
+  name: pdd-sandbox
+  # Hosts the proxy lets the containers reach (ports 80 and 443). "*.example.com" matches every
+  # subdomain. Add your own package mirror here.
+  allowedHosts:
+    - repo.maven.apache.org
+    - repo1.maven.org
+    - plugins.gradle.org
+    - services.gradle.org
+    - downloads.gradle.org
+  proxy:
+    # Address the proxy listens on.
+    listen: ":3128"
+    # Host name or IP the containers use to reach the proxy. Empty: the host end of the sandbox
+    # link (the first address of runtime.containerd.cni.subnet).
+    host: ""
+
+# Build images, one per build tool. The project's mvnw / gradlew is used when present.
+images:
+  maven: "maven:3.9-eclipse-temurin-17"
+  gradle: "gradle:8-jdk17"
+
+output:
+  # Build and test output kept in a run result, in bytes. Longer output keeps its end.
+  maxBytes: 65536
+
+retention:
+  # How long the workspace of a finished run is kept (for debugging). The record is kept.
+  workspace: 1h
+
+reconcile:
+  # Interval of the periodic reconcile pass (also runs on every create and delete).
+  resyncInterval: 5s
+
+# Container runtime of the sandboxes: containerd and runsc run next to this service, normally in
+# the same container (the image pdd/sandbox-controller).
+runtime:
+  containerd:
+    # containerd socket.
+    address: /run/containerd/containerd.sock
+    # containerd namespace of the sandboxes; keeps them apart from other users of the same containerd.
+    namespace: pdd-sandbox
+    # How runsc is started. runc: the runc v2 shim with runsc as its runtime binary (works where
+    # the runsc shim cannot set its OOM score, such as inside a container). runsc: the runsc shim
+    # containerd-shim-runsc-v1.
+    shim: runc
+    # runsc binary used with shim runc. The gVisor package installs it with its gvisor-bin directory.
+    runscPath: /usr/bin/runsc
+    # Output of the sandboxes, one <container>.log per container.
+    logDir: /var/lib/pdd-sandbox/logs
+    # Network namespace files of the sandboxes. Keep it on a tmpfs.
+    netnsDir: /run/pdd-sandbox/netns
+    # Network of the sandboxes: a CNI ptp veth pair per sandbox with a host-local address and no
+    # masquerade. The service refuses to start sandboxes while net.ipv4.ip_forward is not 0 and
+    # cannot be set to 0, because a forwarding runtime container would let sandboxes reach each
+    # other and the networks behind it.
+    cni:
+      # Directory of the ptp, host-local and loopback plugins.
+      binDir: /opt/cni/bin
+      # State of host-local. Keep it on a tmpfs: a restart then releases every address.
+      dataDir: /run/pdd-sandbox/cni
+      # Addresses of the sandboxes. The first address is the host end of every link and the address
+      # the sandboxes use to reach the proxy.
+      subnet: 10.213.0.0/16

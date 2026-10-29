@@ -1,0 +1,15 @@
+# containerd of the sandbox-controller runtime container. Sandboxes are created through the
+# containerd API by the controller; there is no Kubernetes here, so the CRI and NRI plugins are off.
+version = 3
+root = "/var/lib/containerd"
+state = "/run/containerd"
+disabled_plugins = [
+  "io.containerd.grpc.v1.cri",
+  "io.containerd.cri.v1.images",
+  "io.containerd.cri.v1.runtime",
+  "io.containerd.nri.v1.nri",
+  "io.containerd.podsandbox.controller.v1.podsandbox",
+]
+
+[grpc]
+  address = "/run/containerd/containerd.sock"
