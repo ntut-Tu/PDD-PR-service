@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"pdd/services/internal/gitgateway/api"
+	"pdd/services/internal/gitgateway/archive"
 	"pdd/services/internal/gitgateway/auth"
 	"pdd/services/internal/gitgateway/backend"
 	"pdd/services/internal/gitgateway/config"
@@ -45,6 +47,11 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		_ = db.Close()
 		return nil, err
 	}
+	archives, err := archive.Open(filepath.Join(cfg.DataDir, "archives"), cfg.Archive.CacheMaxBytes, nil)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	cacheStore := store.NewCacheStore(db, nil)
 	client, err := upstream.NewClient(cfg, cacheStore, func(err error) { log.Warn("cache error", "error", err) })
 	if err != nil {
@@ -64,7 +71,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 			ListTTL: cfg.Cache.TTLPullList, DetailTTL: cfg.Cache.TTLPullDetail, ExpectedCost: cfg.Upstream.ExpectedCost,
 			TreeTTL: cfg.Cache.TTLTree, FileTTL: cfg.Cache.TTLFile, FilesMaxPages: cfg.Files.MaxPages,
 		}),
-	}, nil, service.Limits{PatchBytes: cfg.Upstream.MaxBodyBytes, FileBytes: cfg.Files.MaxBytes})
+	}, nil, service.Limits{PatchBytes: cfg.Upstream.MaxBodyBytes, FileBytes: cfg.Files.MaxBytes, ArchiveBytes: cfg.Archive.MaxBytes},
+		service.WithArchiveCache(archives))
 	handler := api.NewHandler(api.Deps{
 		Verifier:      auth.NewVerifier(cfg.JWTSecret, nil),
 		InternalToken: cfg.InternalToken,

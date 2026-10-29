@@ -108,6 +108,18 @@ func (p *Provider) File(ctx context.Context, token string, repo model.Repo, ref,
 	return resp.Body, meta, nil
 }
 
+// Archive implements provider.Provider.
+func (p *Provider) Archive(ctx context.Context, token string, repo model.Repo, ref string) (provider.ArchiveStream, error) {
+	stream, err := provider.GetStream(ctx, p.cfg.Client, client.Request{
+		URL:   fmt.Sprintf("%s/repository/archive.tar.gz?sha=%s", projectURL(repo), url.QueryEscape(ref)),
+		Token: token, Cost: p.cfg.ExpectedCost,
+	})
+	if err != nil {
+		return provider.ArchiveStream{}, wrapRepo(repo, err)
+	}
+	return stream, nil
+}
+
 // projectURL is the REST URL of the project; the full path is one escaped segment.
 func projectURL(repo model.Repo) string {
 	return fmt.Sprintf("%s/api/v4/projects/%s", strings.TrimRight(repo.BaseURL, "/"), url.PathEscape(repo.FullPath()))

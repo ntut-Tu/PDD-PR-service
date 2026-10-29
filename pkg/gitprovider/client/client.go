@@ -29,6 +29,9 @@ var errBodyTooLarge = errors.New("client: response body too large")
 type Config struct {
 	// HTTPClient sends the requests. Defaults to a client with a 30s timeout.
 	HTTPClient *http.Client
+	// StreamHTTPClient sends Stream requests. It is separate because its timeout must cover a
+	// large body, while HTTPClient's covers a small buffered one. Defaults to HTTPClient.
+	StreamHTTPClient *http.Client
 	// Cache stores responses. Required.
 	Cache cache.Store
 	// Limiter tracks the quota. Required.
@@ -195,6 +198,7 @@ type call struct {
 	conditional  bool
 	graphQL      bool
 	forceRefresh bool
+	stream       bool
 }
 
 func (c *Client) execute(ctx context.Context, cl *call) (*Response, error) {
@@ -292,6 +296,9 @@ func (c *Client) send(ctx context.Context, cl *call, entry cache.Entry, cached b
 	}
 	if cl.conditional && cached && entry.ETag != "" {
 		req.Header.Set("If-None-Match", entry.ETag)
+	}
+	if cl.stream && c.cfg.StreamHTTPClient != nil {
+		return c.cfg.StreamHTTPClient.Do(req)
 	}
 	return c.cfg.HTTPClient.Do(req)
 }

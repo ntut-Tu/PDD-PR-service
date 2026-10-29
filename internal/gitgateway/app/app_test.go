@@ -32,6 +32,12 @@ type world struct {
 	githubStatus                           atomic.Int32
 	githubRemaining                        atomic.Int32
 	lastGitHubAuth, lastGitLabAuth         atomic.Value
+
+	// archiveDownloads counts the requests that delivered archive bytes; flaky counts the
+	// requests for the archive that fails once.
+	archiveDownloads, flaky atomic.Int32
+	lastDownloadAuth        atomic.Value
+	lastTarballAuth         atomic.Value
 }
 
 func newWorld(t *testing.T) *world {
@@ -45,6 +51,9 @@ func newWorld(t *testing.T) *world {
 		w.lastGitHubAuth.Store(r.Header.Get("Authorization"))
 		if status := int(w.githubStatus.Load()); status != http.StatusOK {
 			rw.WriteHeader(status)
+			return
+		}
+		if w.serveArchive(rw, r, "/repos/octo/hello/tarball/", "/codeload/octo/hello/") {
 			return
 		}
 		if r.Method == http.MethodGet {
@@ -67,6 +76,9 @@ func newWorld(t *testing.T) *world {
 	w.gitlab = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		w.gitlabCalls.Add(1)
 		w.lastGitLabAuth.Store(r.Header.Get("Authorization"))
+		if w.serveArchive(rw, r, "/api/v4/projects/pdd%2Fbackend/repository/archive.tar.gz", "") {
+			return
+		}
 		if r.Method == http.MethodGet {
 			serveGitLabREST(rw, r)
 			return

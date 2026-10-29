@@ -28,6 +28,15 @@ type fakeProvider struct {
 	content   []byte
 	contentEr error
 	gotRef    string
+
+	archive      func() (provider.ArchiveStream, error)
+	archiveCalls int
+}
+
+func (f *fakeProvider) Archive(_ context.Context, _ string, _ model.Repo, ref string) (provider.ArchiveStream, error) {
+	f.archiveCalls++
+	f.gotRef = ref
+	return f.archive()
 }
 
 func (f *fakeProvider) PullFiles(context.Context, string, model.Repo, int) (provider.ChangedFiles, provider.Meta, error) {

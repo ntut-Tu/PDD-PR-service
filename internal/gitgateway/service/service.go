@@ -10,6 +10,9 @@ import (
 	"sort"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
+	"pdd/services/internal/gitgateway/archive"
 	"pdd/services/internal/gitgateway/model"
 	"pdd/services/internal/gitgateway/provider"
 	"pdd/services/pkg/gitprovider"
@@ -20,6 +23,7 @@ const (
 	CodeUpstreamFailed       = "upstream_failed"
 	CodeQuotaReserve         = "quota_reserve"
 	CodeProviderUnauthorized = "provider_unauthorized"
+	CodeArchiveTooLarge      = "archive_too_large"
 )
 
 // RepoError reports why one repository could not be read or is served stale.
@@ -52,6 +56,8 @@ type Service struct {
 	providers map[model.Provider]provider.Provider
 	now       func() time.Time
 	limits    Limits
+	archives  *archive.Cache
+	flight    singleflight.Group
 }
 
 // Limits bound the size of the content returned to API clients. Zero means unlimited.
@@ -60,14 +66,28 @@ type Limits struct {
 	PatchBytes int64
 	// FileBytes is the largest file content.
 	FileBytes int
+	// ArchiveBytes is the largest source archive.
+	ArchiveBytes int64
+}
+
+// Option configures optional parts of a Service.
+type Option func(*Service)
+
+// WithArchiveCache enables source archives, which are stored in cache.
+func WithArchiveCache(cache *archive.Cache) Option {
+	return func(s *Service) { s.archives = cache }
 }
 
 // New creates a Service. A nil now defaults to time.Now.
-func New(providers map[model.Provider]provider.Provider, now func() time.Time, limits Limits) *Service {
+func New(providers map[model.Provider]provider.Provider, now func() time.Time, limits Limits, opts ...Option) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{providers: providers, now: now, limits: limits}
+	s := &Service{providers: providers, now: now, limits: limits}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // ListPulls lists the open pull requests of repos, newest update first. A

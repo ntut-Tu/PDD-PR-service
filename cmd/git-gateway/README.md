@@ -126,7 +126,8 @@ Every error has the form `{"error": {"code": "...", "message": "..."}}`.
 | --- | --- | --- |
 | 401 | `unauthorized` | Missing, malformed, badly signed or expired JWT (internal API: wrong `X-Internal-Token`) |
 | 403 | `forbidden` | The caller is not a member of the project |
-| 400 | `bad_request` | Internal API: a required query parameter is missing |
+| 400 | `bad_request` | Internal API: a required query parameter is missing or `ref` of the archive is not a 40-hex SHA |
+| 413 | `archive_too_large` | Internal archive endpoint: the archive is larger than `archive.maxBytes` |
 | 404 | `not_found` | Unknown project, repository of another project, pull request, file or ref |
 | 502 | `upstream_failed` | The provider (or the PDD backend) failed after the retry budget and nothing is cached |
 | 502 | `provider_unauthorized` | The provider rejected the caller's token (detail endpoint) |
@@ -187,6 +188,37 @@ size. `400 bad_request` when `account`, `ref` or `path` is missing. A file large
 Trees, files and diffs go through the request policy of ADR 0001: REST with ETag revalidation, cached
 for `cache.ttl.tree`, `cache.ttl.file` and `cache.ttl.prDetail` respectively, quota reserve and bounded retries.
 
+### Source archive endpoint
+
+`GET /internal/v1/projects/{projectId}/repos/{repoId}/archive?account=<account>&ref=<sha>`
+
+Returns the repository at the commit `ref` as `application/gzip` (a tar.gz whose entries sit under one
+top-level directory, which both providers add). It is used by the sandbox-controller to get the pull
+request head source ([ADR 0003](../../../docs/adr/0003-sandbox-architecture.md)). Authentication, the
+stored provider token and the repository lookup are the same as for the content endpoints above, and so
+are the access remarks: callers are trusted services, and Traefik does not route the internal prefix.
+
+* `ref` must be a 40-character hexadecimal commit SHA (upper case is accepted and lowered); a branch or tag
+  name, or a missing `ref`, is `400 bad_request`. Resolve a pull request to its `headSha` with the files
+  or detail endpoints first.
+* GitHub: `GET /repos/{owner}/{repo}/tarball/{sha}`; the redirect to the download host is followed and the
+  token is not sent there. GitLab: `GET /api/v4/projects/{full path}/repository/archive.tar.gz?sha={sha}`
+  with the full path (nested groups included) as one escaped segment under the repository's base URL, which
+  may have a path prefix.
+* The download goes through the request policy of ADR 0001 (quota reserve, bounded retries, concurrency
+  cap per token). It is not cached in SQLite and not limited by `upstream.maxBodyBytes`; it is bounded by
+  `archive.maxBytes` and `archive.timeout` instead.
+* The archive is first written to `<storage.dataDir>/archives` and then streamed from there. Archives are
+  cached by provider, host, repository path and SHA. A cached archive is served without any provider
+  call, also after a restart. When the total size of the stored archives exceeds `archive.cacheMaxBytes`,
+  the least recently used archives are deleted. Concurrent requests for the same archive share one download.
+* An archive larger than `archive.maxBytes` (announced by the provider or found while downloading) is not
+  stored and answered with `413 archive_too_large`.
+
+Errors use the standard shape: `400 bad_request`, `401 unauthorized`, `404 not_found` (unknown account
+token, repository, commit or no access), `413 archive_too_large`, `502 upstream_failed`,
+`502 provider_unauthorized`, `503 quota_reserve`.
+
 ## Health
 
 `GET /healthz` returns `200 {"status":"ok"}` when the database answers, `503` otherwise. No authentication.
@@ -241,7 +273,7 @@ security:
 | `pdd.backend.cacheTTL` | `30s` | Lifetime of cached project membership and repository lookups |
 | `security.tokenKey` | required | See above; encrypts stored provider tokens |
 | `security.internalToken` | required | See above |
-| `storage.dataDir` | `/data` | Directory of the SQLite database `git-gateway.db` |
+| `storage.dataDir` | `/data` | Directory of the SQLite database `git-gateway.db` and of the `archives/` cache |
 | `github.apiURL` | `https://api.github.com` | GitHub API base URL; the GraphQL endpoint is derived (`/graphql`, or `/api/graphql` for `.../api/v3`) |
 | `upstream.timeout` | `30s` | Timeout of one provider request |
 | `upstream.maxBodyBytes` | `10485760` | Largest accepted provider response |
@@ -258,6 +290,9 @@ security:
 | `cache.ttl.tree` | `300s` | Fresh lifetime of repository trees (used by the test generation stories) |
 | `cache.ttl.file` | `600s` | Fresh lifetime of file contents (used by the test generation stories) |
 | `cache.staleTTL` | `24h` | How long data is kept as stale fallback after it stopped being fresh |
+| `archive.maxBytes` | `209715200` | Largest accepted source archive (200 MiB); a larger one is `413 archive_too_large` |
+| `archive.cacheMaxBytes` | `2147483648` | Total size of the archives kept in `storage.dataDir/archives` (2 GiB), least recently used first; must be at least `archive.maxBytes` |
+| `archive.timeout` | `5m` | Time allowed for downloading one archive, body included |
 | `list.batchSize` | `10` | Repositories per batched list query (GitLab: at most 10) |
 | `list.maxPages` | `3` | Pages of 50 followed per repository |
 

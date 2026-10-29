@@ -103,6 +103,19 @@ func (p *Provider) File(ctx context.Context, token string, repo model.Repo, ref,
 	return resp.Body, meta, nil
 }
 
+// Archive implements provider.Provider. The tarball endpoint answers with a redirect to the
+// download host, which the client follows without the token.
+func (p *Provider) Archive(ctx context.Context, token string, repo model.Repo, ref string) (provider.ArchiveStream, error) {
+	stream, err := provider.GetStream(ctx, p.cfg.Client, client.Request{
+		URL:   fmt.Sprintf("%s/tarball/%s", p.repoURL(repo), url.PathEscape(ref)),
+		Token: token, Cost: p.cfg.ExpectedCost,
+	})
+	if err != nil {
+		return provider.ArchiveStream{}, wrapRepo(repo, err)
+	}
+	return stream, nil
+}
+
 func (p *Provider) repoURL(repo model.Repo) string {
 	return fmt.Sprintf("%s/repos/%s/%s", strings.TrimRight(p.cfg.APIURL, "/"), url.PathEscape(repo.Owner), url.PathEscape(repo.Name))
 }

@@ -13,6 +13,7 @@ import (
 	"pdd/services/internal/gitgateway/config"
 	"pdd/services/internal/gitgateway/upstream"
 	"pdd/services/pkg/gitprovider/cache"
+	"pdd/services/pkg/gitprovider/client"
 )
 
 func TestLimitedTransportCapsConcurrencyPerToken(t *testing.T) {
@@ -142,6 +143,39 @@ func TestNewClientBuildsPolicyClient(t *testing.T) {
 	if err != nil || c == nil {
 		t.Fatalf("NewClient = %v, %v", c, err)
 	}
+}
+
+func TestStreamsShareTheConcurrencyCapOfTheTransport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	defer srv.Close()
+	cfg := config.Config{
+		Upstream: config.Upstream{Concurrency: 1, RetryMaxAttempts: 1, Timeout: time.Second, MaxBodyBytes: 1 << 20, ReserveFraction: 0.1},
+		Cache:    config.Cache{TTLPullList: time.Minute, StaleTTL: time.Hour},
+		Archive:  config.Archive{Timeout: time.Minute},
+	}
+	c, err := upstream.NewClient(cfg, cache.NewMemoryStore(0, nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := c.Stream(context.Background(), client.Request{URL: srv.URL, Token: "same"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var secondDone atomic.Bool
+	go func() {
+		second, err := c.Stream(context.Background(), client.Request{URL: srv.URL, Token: "same"})
+		if err == nil {
+			_ = second.Body.Close()
+		}
+		secondDone.Store(true)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if secondDone.Load() {
+		t.Fatal("second stream ran while the first still held the only slot")
+	}
+	_ = first.Body.Close()
+	waitFor(t, secondDone.Load)
 }
 
 func waitFor(t *testing.T, cond func() bool) {

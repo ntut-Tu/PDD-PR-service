@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -33,6 +34,16 @@ type Provider interface {
 	Tree(ctx context.Context, token string, repo model.Repo, ref string) (Tree, Meta, error)
 	// File returns the raw content of path at ref. The content is not limited here.
 	File(ctx context.Context, token string, repo model.Repo, ref, path string) ([]byte, Meta, error)
+	// Archive starts the download of repo at ref (a commit SHA) as a tar.gz. The caller reads
+	// and closes the body.
+	Archive(ctx context.Context, token string, repo model.Repo, ref string) (ArchiveStream, error)
+}
+
+// ArchiveStream is a repository archive that is being downloaded.
+type ArchiveStream struct {
+	Body io.ReadCloser
+	// Size is the length announced by the provider, -1 when unknown.
+	Size int64
 }
 
 // ChangedFiles is the file list of a pull request.
@@ -170,6 +181,23 @@ func Get(ctx context.Context, c *client.Client, req client.Request) (*client.Res
 		return nil, meta, ErrNotFound
 	default:
 		return nil, meta, &gitprovider.StatusError{StatusCode: resp.StatusCode}
+	}
+}
+
+// GetStream is Get for a body that is read by the caller. A 404 becomes ErrNotFound and any
+// other status outside 2xx a *gitprovider.StatusError. The caller closes the returned body.
+func GetStream(ctx context.Context, c *client.Client, req client.Request) (ArchiveStream, error) {
+	resp, err := c.Stream(ctx, req)
+	if err != nil {
+		return ArchiveStream{}, err
+	}
+	switch {
+	case resp.Body != nil:
+		return ArchiveStream{Body: resp.Body, Size: resp.ContentLength}, nil
+	case resp.StatusCode == http.StatusNotFound:
+		return ArchiveStream{}, ErrNotFound
+	default:
+		return ArchiveStream{}, &gitprovider.StatusError{StatusCode: resp.StatusCode}
 	}
 }
 

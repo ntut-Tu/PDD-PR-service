@@ -62,6 +62,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Files != (config.Files{MaxBytes: 1048576, MaxPages: 20}) {
 		t.Errorf("files defaults = %+v", cfg.Files)
 	}
+	if cfg.Archive != (config.Archive{MaxBytes: 209715200, CacheMaxBytes: 2147483648, Timeout: 5 * time.Minute}) {
+		t.Errorf("archive defaults = %+v", cfg.Archive)
+	}
 	if cfg.JWTSecret != "s" || cfg.InternalToken != "i" || len(cfg.TokenKey) != 32 {
 		t.Errorf("secrets = %+v", cfg)
 	}
@@ -77,7 +80,7 @@ func TestEmbeddedValuesDocumentEveryKey(t *testing.T) {
 	for _, key := range []string{
 		"listenAddr:", "logLevel:", "shutdownTimeout:", "jwtSecret:", "insecureTLS:", "cacheTTL:", "tokenKey:", "internalToken:",
 		"dataDir:", "apiURL:", "maxBodyBytes:", "concurrency:", "reserveFraction:", "reserveMin:", "graphqlExpectedCost:",
-		"maxAttempts:", "baseDelay:", "maxDelay:", "maxRetryAfter:", "prList:", "prDetail:", "tree:", "file:", "staleTTL:", "batchSize:", "maxPages:", "maxBytes:",
+		"maxAttempts:", "baseDelay:", "maxDelay:", "maxRetryAfter:", "prList:", "prDetail:", "tree:", "file:", "staleTTL:", "batchSize:", "maxPages:", "maxBytes:", "cacheMaxBytes:", "timeout:",
 	} {
 		loc := regexp.MustCompile(`(?m)^ *` + regexp.QuoteMeta(key)).FindStringIndex(text)
 		if loc == nil {
@@ -262,5 +265,27 @@ func TestOverridesApply(t *testing.T) {
 
 	if cfg.LogLevel != slog.LevelDebug || cfg.Upstream.ReserveFraction != 0.25 || cfg.Upstream.Concurrency != 2 {
 		t.Errorf("overrides not applied: %+v", cfg)
+	}
+}
+
+func TestLoadValidatesArchiveLimits(t *testing.T) {
+	_, err := config.LoadYAML([]byte(requiredYAML + "archive: {maxBytes: 0, cacheMaxBytes: -1, timeout: 0s}\n"))
+	if err == nil {
+		t.Fatal("invalid archive limits accepted")
+	}
+	for _, want := range []string{"archive.maxBytes: must be greater", "archive.cacheMaxBytes: must be greater", "archive.timeout: must be a positive duration"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q: %v", want, err)
+		}
+	}
+
+	_, err = config.LoadYAML([]byte(requiredYAML + "archive: {maxBytes: 100, cacheMaxBytes: 99}\n"))
+	if err == nil || !strings.Contains(err.Error(), "archive.cacheMaxBytes: must not be smaller than archive.maxBytes") {
+		t.Errorf("cache smaller than one archive: %v", err)
+	}
+
+	cfg := mustLoad(t, requiredYAML, "archive: {maxBytes: 100, cacheMaxBytes: 100, timeout: 1m}\n")
+	if cfg.Archive != (config.Archive{MaxBytes: 100, CacheMaxBytes: 100, Timeout: time.Minute}) {
+		t.Errorf("archive = %+v", cfg.Archive)
 	}
 }

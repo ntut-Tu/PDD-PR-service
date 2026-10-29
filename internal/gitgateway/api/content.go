@@ -1,7 +1,12 @@
 package api
 
 import (
+	"errors"
+	"io"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"pdd/services/internal/gitgateway/model"
@@ -179,4 +184,41 @@ func repoAndNumber(w http.ResponseWriter, r *http.Request, repos []model.Repo) (
 		return model.Repo{}, 0, false
 	}
 	return repo, int(number), true
+}
+
+var commitSHA = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+// internalArchive streams the repository at a commit as application/gzip. The download may
+// take longer than the server's write timeout, so the deadline is lifted for this response.
+func (s *Server) internalArchive(w http.ResponseWriter, r *http.Request) {
+	token, repos, ok := s.internalContext(w, r)
+	if !ok {
+		return
+	}
+	repo, ok := repoFromPath(w, r, repos)
+	if !ok {
+		return
+	}
+	ref := r.URL.Query().Get("ref")
+	if !commitSHA.MatchString(ref) {
+		writeError(w, http.StatusBadRequest, "bad_request", "query parameter ref must be a 40-character commit SHA")
+		return
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	res, err := s.Pulls.Archive(r.Context(), token, repo, strings.ToLower(ref))
+	if errors.Is(err, service.ErrArchiveTooLarge) {
+		writeError(w, http.StatusRequestEntityTooLarge, service.CodeArchiveTooLarge, "the archive is larger than archive.maxBytes")
+		return
+	}
+	if err != nil {
+		s.writeProviderError(w, err)
+		return
+	}
+	defer func() { _ = res.Body.Close() }()
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Length", strconv.FormatInt(res.Size, 10))
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, res.Body); err != nil {
+		s.Logger.Warn("stream archive", "error", err)
+	}
 }

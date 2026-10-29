@@ -99,6 +99,16 @@ files:
   # Pages of 100 followed for pull request files and GitLab trees; more entries are flagged truncated.
   maxPages: 20
 
+# Source archives (tar.gz) of a repository at a commit, for the sandbox-controller.
+archive:
+  # Largest accepted archive, in bytes. A bigger one is refused with 413 archive_too_large.
+  maxBytes: 209715200
+  # Total size of the archives kept on disk under storage.dataDir/archives, in bytes. The least
+  # recently used archives are deleted first. Must not be smaller than maxBytes.
+  cacheMaxBytes: 2147483648
+  # Time allowed for downloading one archive from the provider, including the body.
+  timeout: 5m
+
 # Pull request list queries.
 list:
   # Repositories per batched list query (GitLab: at most 10).

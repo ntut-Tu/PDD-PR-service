@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"pdd/services/internal/gitgateway/provider"
 	"pdd/services/internal/gitgateway/provider/github"
 	"pdd/services/internal/gitgateway/provider/providertest"
+	"pdd/services/pkg/gitprovider"
 )
 
 func newRESTProvider(t *testing.T, srv *providertest.RESTServer, ttl time.Duration, filesMaxPages int) *github.Provider {
@@ -198,5 +200,63 @@ func TestRESTMalformedBodies(t *testing.T) {
 	}
 	if _, _, err := p.Tree(context.Background(), "t", repo(1, "o", "n"), "x"); err == nil {
 		t.Error("malformed tree accepted")
+	}
+}
+
+func readAll(t *testing.T, stream provider.ArchiveStream) string {
+	t.Helper()
+	defer func() { _ = stream.Body.Close() }()
+	body, err := io.ReadAll(stream.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+const archiveSHA = "0123456789abcdef0123456789abcdef01234567"
+
+func TestArchiveFollowsTheRedirectToTheDownloadHostWithoutTheToken(t *testing.T) {
+	download := providertest.NewRESTServer(t, func(_ providertest.RESTRequest, w http.ResponseWriter) {
+		_, _ = io.WriteString(w, "tarball-bytes")
+	})
+	srv := providertest.NewRESTServer(t, func(_ providertest.RESTRequest, w http.ResponseWriter) {
+		// Another host name, because the port is ignored when Go decides to drop credentials.
+		w.Header().Set("Location", strings.Replace(download.URL, "127.0.0.1", "localhost", 1)+"/signed/o-n-"+archiveSHA)
+		w.WriteHeader(http.StatusFound)
+	})
+	p := newRESTProvider(t, srv, time.Minute, 5)
+
+	stream, err := p.Archive(context.Background(), "tok", repo(1, "o", "n"), archiveSHA)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readAll(t, stream); got != "tarball-bytes" || stream.Size != 13 {
+		t.Errorf("body %q size %d", got, stream.Size)
+	}
+	req := srv.Requests()[0]
+	if req.Path != "/repos/o/n/tarball/"+archiveSHA || req.Authorization != "Bearer tok" {
+		t.Errorf("api request = %+v", req)
+	}
+	if got := download.Requests(); len(got) != 1 || got[0].Authorization != "" || got[0].Path != "/signed/o-n-"+archiveSHA {
+		t.Errorf("download requests = %+v", got)
+	}
+}
+
+func TestArchiveErrors(t *testing.T) {
+	status := http.StatusNotFound
+	srv := providertest.NewRESTServer(t, func(_ providertest.RESTRequest, w http.ResponseWriter) { w.WriteHeader(status) })
+	p := newRESTProvider(t, srv, time.Minute, 5)
+
+	if _, err := p.Archive(context.Background(), "t", repo(1, "o", "n"), archiveSHA); !errors.Is(err, provider.ErrNotFound) {
+		t.Errorf("404 error = %v, want ErrNotFound", err)
+	}
+	status = http.StatusForbidden
+	if _, err := p.Archive(context.Background(), "t", repo(1, "o", "n"), archiveSHA); err == nil || errors.Is(err, provider.ErrNotFound) {
+		t.Errorf("403 error = %v", err)
+	}
+	status = http.StatusUnauthorized
+	if _, err := p.Archive(context.Background(), "t", repo(1, "o", "n"), archiveSHA); !errors.Is(err, gitprovider.ErrUnauthorized) {
+		t.Errorf("401 error = %v", err)
 	}
 }

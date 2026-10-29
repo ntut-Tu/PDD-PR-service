@@ -18,12 +18,12 @@ import (
 // request it sends counts against the per-token concurrency cap.
 func NewClient(cfg config.Config, store cache.Store, onCacheError func(error)) (*client.Client, error) {
 	up := cfg.Upstream
+	transport := NewLimitedTransport(http.DefaultTransport, up.Concurrency)
 	return client.New(client.Config{
-		HTTPClient: &http.Client{
-			Timeout:   up.Timeout,
-			Transport: NewLimitedTransport(http.DefaultTransport, up.Concurrency),
-		},
-		Cache: store,
+		HTTPClient: &http.Client{Timeout: up.Timeout, Transport: transport},
+		// Archives share the transport, so they count against the same per-token concurrency cap.
+		StreamHTTPClient: &http.Client{Timeout: cfg.Archive.Timeout, Transport: transport},
+		Cache:            store,
 		Limiter: ratelimit.NewTracker(ratelimit.Config{
 			ReserveFraction: up.ReserveFraction,
 			ReserveMin:      up.ReserveMin,

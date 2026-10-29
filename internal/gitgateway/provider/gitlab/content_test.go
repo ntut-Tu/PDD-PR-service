@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -164,5 +165,59 @@ func TestRESTErrors(t *testing.T) {
 		if err := call(newRESTProvider(t, time.Minute, 5)); err == nil || errors.Is(err, provider.ErrNotFound) {
 			t.Errorf("%s: 403 error = %v", name, err)
 		}
+	}
+}
+
+const archiveSHA = "0123456789abcdef0123456789abcdef01234567"
+
+func TestArchiveUsesTheEscapedFullPathOfANestedGroup(t *testing.T) {
+	srv := providertest.NewRESTServer(t, func(_ providertest.RESTRequest, w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = io.WriteString(w, "gitlab-archive")
+	})
+	p := newRESTProvider(t, time.Minute, 5)
+
+	stream, err := p.Archive(context.Background(), "tok", repo(1, srv.URL, "grp/sub", "app"), archiveSHA)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Body.Close() }()
+	body, _ := io.ReadAll(stream.Body)
+	req := srv.Requests()[0]
+	if string(body) != "gitlab-archive" || stream.Size != 14 {
+		t.Errorf("body %q size %d", body, stream.Size)
+	}
+	if req.Path != "/api/v4/projects/grp%2Fsub%2Fapp/repository/archive.tar.gz" || req.Query != "sha="+archiveSHA || req.Authorization != "Bearer tok" {
+		t.Errorf("request = %+v", req)
+	}
+}
+
+func TestArchiveKeepsAPathPrefixOfTheBaseURL(t *testing.T) {
+	srv := providertest.NewRESTServer(t, func(_ providertest.RESTRequest, w http.ResponseWriter) { _, _ = io.WriteString(w, "x") })
+	p := newRESTProvider(t, time.Minute, 5)
+
+	stream, err := p.Archive(context.Background(), "tok", repo(1, srv.URL+"/gitlab/", "grp", "app"), archiveSHA)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = stream.Body.Close()
+	if got := srv.Requests()[0].Path; got != "/gitlab/api/v4/projects/grp%2Fapp/repository/archive.tar.gz" {
+		t.Errorf("path = %q", got)
+	}
+}
+
+func TestArchiveErrors(t *testing.T) {
+	status := http.StatusNotFound
+	srv := providertest.NewRESTServer(t, func(_ providertest.RESTRequest, w http.ResponseWriter) { w.WriteHeader(status) })
+	p := newRESTProvider(t, time.Minute, 5)
+
+	if _, err := p.Archive(context.Background(), "t", repo(1, srv.URL, "g", "a"), archiveSHA); !errors.Is(err, provider.ErrNotFound) {
+		t.Errorf("404 error = %v, want ErrNotFound", err)
+	}
+	status = http.StatusForbidden
+	if _, err := p.Archive(context.Background(), "t", repo(1, srv.URL, "g", "a"), archiveSHA); err == nil || errors.Is(err, provider.ErrNotFound) {
+		t.Errorf("403 error = %v", err)
 	}
 }

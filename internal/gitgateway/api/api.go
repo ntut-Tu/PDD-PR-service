@@ -39,6 +39,7 @@ type Pulls interface {
 	PullTree(ctx context.Context, token string, repo model.Repo, number int) (service.TreeResult, error)
 	Tree(ctx context.Context, token string, repo model.Repo, ref string) (service.TreeResult, error)
 	File(ctx context.Context, token string, repo model.Repo, ref, path string) (service.FileResult, error)
+	Archive(ctx context.Context, token string, repo model.Repo, ref string) (service.ArchiveResult, error)
 }
 
 // Deps are the collaborators of the handlers.
@@ -72,6 +73,7 @@ func NewHandler(deps Deps) http.Handler {
 	mux.Handle("GET /internal/v1/projects/{projectId}/repos/{repoId}/pulls/{number}/files", s.internal(s.internalFiles))
 	mux.Handle("GET /internal/v1/projects/{projectId}/repos/{repoId}/tree", s.internal(s.internalTree))
 	mux.Handle("GET /internal/v1/projects/{projectId}/repos/{repoId}/files", s.internal(s.internalFile))
+	mux.Handle("GET /internal/v1/projects/{projectId}/repos/{repoId}/archive", s.internal(s.internalArchive))
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")
 	})

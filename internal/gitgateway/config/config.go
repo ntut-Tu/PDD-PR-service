@@ -41,6 +41,7 @@ type Config struct {
 	Upstream Upstream
 	Cache    Cache
 	Files    Files
+	Archive  Archive
 }
 
 // Backend configures the PDD backend client.
@@ -85,6 +86,16 @@ type Cache struct {
 type Files struct {
 	MaxBytes int
 	MaxPages int
+}
+
+// Archive configures the source archive endpoint.
+type Archive struct {
+	// MaxBytes is the largest accepted archive.
+	MaxBytes int64
+	// CacheMaxBytes is the total size of the archives kept on disk.
+	CacheMaxBytes int64
+	// Timeout bounds one archive download, including its body.
+	Timeout time.Duration
 }
 
 // Load reads the files in order over the embedded defaults and returns the validated settings.
@@ -217,6 +228,11 @@ type values struct {
 		MaxBytes int `yaml:"maxBytes"`
 		MaxPages int `yaml:"maxPages"`
 	} `yaml:"files"`
+	Archive struct {
+		MaxBytes      int64         `yaml:"maxBytes"`
+		CacheMaxBytes int64         `yaml:"cacheMaxBytes"`
+		Timeout       time.Duration `yaml:"timeout"`
+	} `yaml:"archive"`
 	List struct {
 		BatchSize int `yaml:"batchSize"`
 		MaxPages  int `yaml:"maxPages"`
@@ -268,6 +284,14 @@ func (v *values) validate() (Config, error) {
 			MaxBytes: c.positive("files.maxBytes", v.Files.MaxBytes),
 			MaxPages: c.positive("files.maxPages", v.Files.MaxPages),
 		},
+		Archive: Archive{
+			MaxBytes:      c.positiveBytes("archive.maxBytes", v.Archive.MaxBytes),
+			CacheMaxBytes: c.positiveBytes("archive.cacheMaxBytes", v.Archive.CacheMaxBytes),
+			Timeout:       c.duration("archive.timeout", v.Archive.Timeout),
+		},
+	}
+	if cfg.Archive.MaxBytes > cfg.Archive.CacheMaxBytes && cfg.Archive.CacheMaxBytes > 0 {
+		c.fail("archive.cacheMaxBytes", "must not be smaller than archive.maxBytes")
 	}
 	if err := c.err(); err != nil {
 		return Config{}, err
@@ -323,6 +347,13 @@ func (c *checker) tokenKey(path, v string) []byte {
 }
 
 func (c *checker) positive(path string, n int) int {
+	if n < 1 {
+		c.fail(path, "must be greater than zero")
+	}
+	return n
+}
+
+func (c *checker) positiveBytes(path string, n int64) int64 {
 	if n < 1 {
 		c.fail(path, "must be greater than zero")
 	}

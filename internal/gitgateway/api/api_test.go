@@ -83,6 +83,14 @@ type fakePulls struct {
 	contentEr error
 	gotRef    string
 	gotPath   string
+
+	archive    string
+	archiveErr error
+}
+
+func (f *fakePulls) Archive(_ context.Context, token string, repo model.Repo, ref string) (service.ArchiveResult, error) {
+	f.gotToken, f.gotRepo, f.gotRef = token, repo, ref
+	return service.ArchiveResult{Body: io.NopCloser(strings.NewReader(f.archive)), Size: int64(len(f.archive))}, f.archiveErr
 }
 
 func (f *fakePulls) PullFiles(_ context.Context, token string, repo model.Repo, number int) (service.FilesResult, error) {
